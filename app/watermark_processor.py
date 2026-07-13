@@ -1,5 +1,6 @@
 import subprocess
 import os
+import traceback
 import tempfile
 from typing import List, Tuple, Optional
 from PIL import Image as PILImage, ImageDraw, ImageFont
@@ -199,7 +200,7 @@ class WatermarkExporter:
                     new_x, new_y = 0, 0
                     new_pos = PositionPreset.TOP_LEFT
                 else:
-                    # rotated single text ¡ú render with transforms, overlay at position
+                    # rotated single text â†’ render with transforms, overlay at position
                     elem = self._render_watermark_element(wm)
                     if elem:
                         elem = self._apply_common_transforms(elem, wm)
@@ -264,7 +265,7 @@ class WatermarkExporter:
         return None
 
     # ------------------------------------------------------------------ #
-    #  TEXT watermark (drawtext) ¡ª only for no-rotation single text       #
+    #  TEXT watermark (drawtext) â€” only for no-rotation single text       #
     # ------------------------------------------------------------------ #
     def _build_text_filter(self, wm: Watermark, vw: int, vh: int,
                            current_label: str, label_idx: int):
@@ -281,11 +282,11 @@ class WatermarkExporter:
             ff_path = _filter_path(self._chinese_font_path)
             fontfile_arg = f":fontfile={ff_path}"
 
-        px, py = self._calc_pos(vw, vh, wm)
+        px_expr, py_expr = self._resolve_overlay_expr(wm)
         dt = (
             f"drawtext=text={escaped_text}:fontsize={fontsize}"
             f":fontcolor={fontcolor}{fontfile_arg}"
-            f":x={px}:y={py}"
+            f":x={px_expr}:y={py_expr}"
         )
         return (f"{current_label}{dt}[txt{label_idx}]",
                 f"[txt{label_idx}]", label_idx + 1)
@@ -311,17 +312,39 @@ class WatermarkExporter:
             chain += f",rotate={angle_rad:.4f}:ow=rotw({angle_rad:.4f}):oh=roth({angle_rad:.4f}):c=none"
 
         chain += f",format=rgba,colorchannelmixer=aa={wm_opacity}"
-        px, py = self._calc_pixel_pos(vw, vh, wm, wm.image_path)
+
+        px_expr, py_expr = self._resolve_overlay_expr(wm)
 
         ov = (
             f"{stream_ref}{chain}{ov_label};"
-            f"{current_label}{ov_label}overlay={px}:{py}:format=auto{out_label}"
+            f"{current_label}{ov_label}overlay={px_expr}:{py_expr}:format=auto{out_label}"
         )
         return (ov, out_label, label_idx + 1)
 
     # ------------------------------------------------------------------ #
     #  Position helpers                                                    #
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _resolve_overlay_expr(wm: Watermark) -> tuple:
+        """Return ffmpeg overlay position expressions (x_expr, y_expr)
+        using W/H (main dimensions) and w/h (overlay dimensions)."""
+        if wm.position_preset == PositionPreset.CUSTOM:
+            return str(wm.custom_x), str(wm.custom_y)
+        margin = 20
+        m = str(margin)
+        preset_map = {
+            PositionPreset.TOP_LEFT: (m, m),
+            PositionPreset.TOP_CENTER: ("(W-w)/2", m),
+            PositionPreset.TOP_RIGHT: ("W-w-" + m, m),
+            PositionPreset.CENTER_LEFT: (m, "(H-h)/2"),
+            PositionPreset.CENTER: ("(W-w)/2", "(H-h)/2"),
+            PositionPreset.CENTER_RIGHT: ("W-w-" + m, "(H-h)/2"),
+            PositionPreset.BOTTOM_LEFT: (m, "H-h-" + m),
+            PositionPreset.BOTTOM_CENTER: ("(W-w)/2", "H-h-" + m),
+            PositionPreset.BOTTOM_RIGHT: ("W-w-" + m, "H-h-" + m),
+        }
+        return preset_map.get(wm.position_preset, ("0", "0"))
+
     def _calc_pos(self, vw: int, vh: int, wm: Watermark) -> tuple:
         margin = 20
         if wm.position_preset == PositionPreset.CUSTOM:
@@ -371,7 +394,7 @@ class WatermarkExporter:
     #  Export                                                              #
     # ------------------------------------------------------------------ #
     def export(self, input_path: str, output_path: str,
-               watermarks: List[Watermark], video_size=None,
+               watermarks: PILImage.Image, video_size=None,
                on_progress=None) -> tuple:
         self._cleanup()
 
@@ -382,31 +405,54 @@ class WatermarkExporter:
                 return False, "Cannot open video file"
             vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            tframe = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             cap.release()
         else:
-            vw, vh = video_size
+            vw, vh, tframe = video_size
 
-        # Pre-process: tile/fill/rotated watermarks ¡ú pre-rendered PNGs
-        processed, _ = self._prepare_watermarks(watermarks, vw, vh)
+        print(f'total frame: {tframe}')
+
+        # Pre-process: tile/fill/rotated watermarks â†’ pre-rendered PNGs
+        # processed, _ = self._prepare_watermarks(watermarks, vw, vh)
 
         # Build filter
-        self._img_stream_counter = 1
-        filter_complex = self._build_filter(processed, vw, vh)
-        if filter_complex is None:
-            self._cleanup()
-            return False, "No watermark filters generated (check image paths)"
+        # self._img_stream_counter = 1
+        # filter_complex = self._build_filter(processed, vw, vh)
+        # if filter_complex is None:
+        #     self._cleanup()
+        #     return False, "No watermark filters generated (check image paths)"
+
+        # Create temp file for ffmpeg -progress output (before building command)
+        import tempfile as _tmpfile
+        
+        _progress_file = _tmpfile.NamedTemporaryFile(suffix=".progress", delete=False)
+        _progress_path = _progress_file.name
+        _progress_file.close()
+        self._temp_files.append(_progress_path)
+
+        _wm_file = _tmpfile.NamedTemporaryFile(suffix=".png", delete=False)
+        _wm_path = _wm_file.name
+        _wm_file.close()
+        self._temp_files.append(_wm_path)
+        os.unlink(_wm_path)
 
         # Build ffmpeg command
         cmd = [self.ffmpeg_path, "-y", "-i", input_path]
-        for wm in processed:
-            if wm.wm_type == WatermarkType.IMAGE and os.path.isfile(wm.image_path):
-                cmd.extend(["-i", wm.image_path])
+        watermarks.save(_wm_path, 'PNG')
+        # for wm in processed:
+        #     if wm.wm_type == WatermarkType.IMAGE and os.path.isfile(wm.image_path):
 
+
+        cmd.extend(["-i", _wm_path])
+
+
+        filter_complex = "[0:v][1:v]overlay=x=0:y=0:format=auto[out]"
         cmd.extend(["-filter_complex", filter_complex])
         cmd.extend(["-map", "[out]"])
         cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "23"])
+        cmd.extend(["-progress", _progress_path])
         cmd.extend([output_path])
-
+        print(cmd)
         try:
             process = subprocess.Popen(
                 cmd,
@@ -416,11 +462,50 @@ class WatermarkExporter:
                 encoding="utf-8",
                 errors="replace"
             )
-            stdout_data, stderr_data = process.communicate(timeout=3600)
+
+            # Stderr reader thread (ffmpeg uses \r for progress, not \n)
+            import time as _time
+            import threading as _threading
+            _stderr_lines = []
+            _stderr_lock = _threading.Lock()
+            _stderr_done = False
+
+            def _read_stderr():
+                while True:
+                    line = process.stderr.readline()
+                    if not line:
+                        break
+                    with _stderr_lock:
+                        _stderr_lines.append(line)
+                with _stderr_lock:
+                    _stderr_done = True
+
+            _stderr_thread = _threading.Thread(target=_read_stderr, daemon=True)
+            _stderr_thread.start()
+
+            # Poll progress file while ffmpeg runs
+            while process.poll() is None:
+                try:
+                    with open(_progress_path, 'r') as pf:
+                        _pdata = pf.read()
+                    for _pline in _pdata.split('\n'):
+                        if _pline.startswith('frame=') and tframe > 0 and on_progress:
+                            _frame = int(_pline.split('=')[1])*100
+                            _pct = min(99, int(_frame / tframe))
+                            on_progress(_pct)
+                except Exception:
+                    traceback.print_exc()
+                    pass
+                _time.sleep(0.2)
+
+
             process.wait()
+            _stderr_thread.join(timeout=2)
+            with _stderr_lock:
+                stderr_data = "".join(_stderr_lines)
 
             if process.returncode != 0:
-                err = (stderr_data or stdout_data or "").strip()
+                err = stderr_data.strip()
                 lines = err.split("\n")
                 error_lines = [l for l in lines
                                if any(k in l.lower() for k in ("error", "invalid",
@@ -432,15 +517,15 @@ class WatermarkExporter:
                     err_msg = err[-300:]
                 return False, f"ffmpeg error (code {process.returncode}): {err_msg}"
 
+            if on_progress:
+                on_progress(100)
             self._cleanup()
             return True, ""
         except FileNotFoundError:
+            traceback.print_exc()
             self._cleanup()
             return False, f"ffmpeg not found at '{self.ffmpeg_path}'"
-        except subprocess.TimeoutExpired:
-            process.kill()
-            self._cleanup()
-            return False, "ffmpeg timed out (video too large?)"
         except Exception as e:
+            traceback.print_exc()
             self._cleanup()
             return False, f"Export exception: {str(e)}"

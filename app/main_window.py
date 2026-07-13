@@ -1,4 +1,4 @@
-﻿import os
+import os
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -242,7 +242,7 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(6, 6, 6, 6)
         main_layout.setSpacing(6)
 
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(3)
 
         self.preview = PreviewPanel()
@@ -285,6 +285,31 @@ class MainWindow(QMainWindow):
         self.export_btn.clicked.connect(self._export_video)
         self.export_btn.setEnabled(False)
 
+        self.export_img_btn = QPushButton("Export Image")
+        self.export_img_btn.setObjectName("exportImageButton")
+        self.export_img_btn.setStyleSheet("""
+            QPushButton#exportImageButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #5a8a3c, stop:1 #4a7a30);
+                color: #ffffff;
+                font-weight: 600;
+                padding: 7px 22px;
+                border: none;
+                border-radius: 3px;
+                font-size: 12px;
+            }
+            QPushButton#exportImageButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #6a9a4c, stop:1 #5a8a3c);
+            }
+            QPushButton#exportImageButton:disabled {
+                background: #3a3a3a;
+                color: #666;
+            }
+        """)
+        self.export_img_btn.clicked.connect(self._export_image)
+        self.export_img_btn.setEnabled(False)
+
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
@@ -293,6 +318,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setTextVisible(True)
 
         bottom_bar.addWidget(self.export_btn)
+        bottom_bar.addWidget(self.export_img_btn)
         bottom_bar.addWidget(self.progress_bar, 1)
 
         main_layout.addLayout(bottom_bar)
@@ -301,15 +327,24 @@ class MainWindow(QMainWindow):
 
     def _on_video_loaded(self, path: str):
         self.video_path = path
-        self.export_btn.setEnabled(True)
+        ext = os.path.splitext(path)[1].lower()
+        # print('video loaded!')
+        img_exts = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.webp'}
+        is_img = ext in img_exts
+        self.export_btn.setEnabled(not is_img)
+        self.export_img_btn.setEnabled(True)
         self.statusBar().showMessage(f"Loaded: {Path(path).name}")
         self._refresh_preview()
 
     def _refresh_preview(self):
         if self.video_path:
+            # print('refresh')
             watermarks = self.console.get_watermarks()
+            print(watermarks)
             self.preview.update_preview(watermarks)
             count = len(watermarks)
+            # for i in watermarks:
+            #     print(i.to_dict())
             if count > 0:
                 self.statusBar().showMessage(f"Video loaded  |  {count} watermark(s) active")
 
@@ -322,7 +357,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Notice", "Please add at least one watermark")
             return
 
-        output_dir = QFileDialog.getExistingDirectory(self, "Select output folder")
+        output_dir = QFileDialog.getExistingDirectory(self, "Select output folder", os.path.dirname(self.video_path))
         if not output_dir:
             return
 
@@ -341,32 +376,37 @@ class MainWindow(QMainWindow):
             progress = Signal(int)
             finished_signal = Signal(bool, str, str)
 
-            def __init__(self, exporter, input_path, output_path, watermarks, video_size):
+            def __init__(self, exporter, input_path, output_path, watermark, video_size):
                 super().__init__()
-                self.exporter = exporter
+                self.exporter: WatermarkExporter = exporter
                 self.input_path = input_path
                 self.output_path = output_path
-                self.watermarks = watermarks
+                self.watermark = watermark
                 self.video_size = video_size
 
             def run(self):
                 success, err = self.exporter.export(
                     self.input_path, self.output_path,
-                    self.watermarks, self.video_size,
-                    on_progress=None
+                    self.watermark, self.video_size,
+                    on_progress=self._on_progress
                 )
                 self.finished_signal.emit(success, self.output_path, err)
+
+            def _on_progress(self, pct: int):
+                self.progress.emit(pct)
 
         import cv2
         cap = cv2.VideoCapture(self.video_path)
         vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         cap.release()
 
         self.worker = ExportWorker(
             exporter, self.video_path, output_path,
-            watermarks, (vw, vh)
+            self.preview.renderer.ori_wm_composite, (vw, vh, total_frames)
         )
+        self.worker.progress.connect(self.progress_bar.setValue)
         self.worker.finished_signal.connect(self._on_export_finished)
         self.worker.start()
 
@@ -386,3 +426,53 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Export Failed", detail)
 
         QTimer.singleShot(3000, lambda: self.progress_bar.setVisible(False))
+
+    def _export_image(self):
+        if self._exporting or not self.video_path:
+            return
+
+        watermarks = self.console.get_watermarks()
+        if not watermarks:
+            QMessageBox.warning(self, "Notice", "Please add at least one watermark")
+            return
+
+        output_dir = QFileDialog.getExistingDirectory(self, "Select output folder", os.path.dirname(self.video_path))
+        if not output_dir:
+            return
+
+        input_name = Path(self.video_path).stem
+        output_path = os.path.join(output_dir, f"{input_name}_watermarked.png")
+
+        self._exporting = True
+        self.export_img_btn.setEnabled(False)
+        self.export_btn.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("Exporting image...")
+        self.statusBar().showMessage("Exporting image...")
+
+        QApplication.processEvents()
+
+        success, err = self.preview.renderer.export_image(watermarks, output_path)
+
+        self._exporting = False
+        self.export_img_btn.setEnabled(True)
+        ext = os.path.splitext(self.video_path)[1].lower()
+        if ext not in {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.webp'}:
+            self.export_btn.setEnabled(True)
+
+        if success:
+            self.progress_bar.setValue(100)
+            self.progress_bar.setFormat("100%")
+            self.statusBar().showMessage(f"Image export complete: {output_path}")
+            QMessageBox.information(self, "Export successful",
+                                    f"Image saved to:\n{output_path}")
+        else:
+            self.progress_bar.setValue(0)
+            self.progress_bar.setFormat("")
+            self.statusBar().showMessage("Image export failed")
+            QMessageBox.critical(self, "Export Failed",
+                                 f"Image export failed.\n\nError: {err}")
+
+        QTimer.singleShot(3000, lambda: self.progress_bar.setVisible(False))
+

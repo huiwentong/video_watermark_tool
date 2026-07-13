@@ -31,7 +31,7 @@ class WatermarkConsole(QWidget):
         tl.addStretch()
         layout.addWidget(title_bar)
 
-        splitter = QSplitter(Qt.Vertical)
+        splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.setHandleWidth(2)
 
         # list panel

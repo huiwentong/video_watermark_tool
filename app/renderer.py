@@ -37,10 +37,13 @@ class WatermarkRenderer:
     def __init__(self, video_path: str = ""):
         self.video_path = video_path
         self._frame: Optional[np.ndarray] = None
+        self.ori_wm_composite: Optional[PILImage.Image] = None
         self._frame_pil: Optional[PILImage.Image] = None
         self.video_width: int = 0
         self.video_height: int = 0
         self._chinese_font_path = _find_chinese_font()
+        self._is_image_source: bool = False
+        self._source_image_path: str = ""
 
     def load_frame(self, video_path: Optional[str] = None, time_sec: float = 0.0) -> bool:
         if video_path:
@@ -59,7 +62,25 @@ class WatermarkRenderer:
             return False
         self.video_height, self.video_width = self._frame.shape[:2]
         self._frame_pil = PILImage.fromarray(cv2.cvtColor(self._frame, cv2.COLOR_BGR2RGB))
+        self._is_image_source = False
         return True
+
+    def load_image(self, image_path: str) -> bool:
+        """Load a static image as the source (instead of a video frame)."""
+        if not os.path.isfile(image_path):
+            return False
+        try:
+            self._source_image_path = image_path
+            self._frame_pil = PILImage.open(image_path).convert("RGBA")
+            self.video_width, self.video_height = self._frame_pil.size
+            self._frame = np.array(self._frame_pil)
+            self._is_image_source = True
+            return True
+        except Exception:
+            return False
+
+    def is_image_source(self) -> bool:
+        return self._is_image_source
 
     def get_frame_size(self) -> Tuple[int, int]:
         return self.video_width, self.video_height
@@ -68,6 +89,9 @@ class WatermarkRenderer:
         if self._frame_pil is None:
             return None
         frame = self._frame_pil.copy()
+        # if self._is_image_source and frame.mode != "RGBA":
+        frame = frame.convert("RGBA")
+        print('render preview！')
         for wm in watermarks:
             if wm.wm_type == WatermarkType.IMAGE:
                 wm_img = self._render_image_watermark(wm, frame.size)
@@ -76,6 +100,7 @@ class WatermarkRenderer:
             if wm_img is None:
                 continue
             frame = self._composite_watermark(frame, wm_img, wm)
+            self.ori_wm_composite = self._composite_only_wmark(frame, wm_img, wm)
         return frame
 
     # ------------------------------------------------------------------ #
@@ -180,6 +205,24 @@ class WatermarkRenderer:
         frame_pil = frame.convert("RGBA")
         frame_pil.paste(wm_img, (px, py), wm_img)
         return frame_pil
+    
+    def _composite_only_wmark(self, frame: PILImage.Image, wm_img: PILImage.Image,
+                             wm: Watermark) -> PILImage.Image:
+        cw, ch = frame.size
+        iw, ih = wm_img.size
+        transparent_img = PILImage.new("RGBA", (cw, ch), (0, 0, 0, 0))
+
+        if wm.tiling_mode == TilingMode.TILE:
+            frame_pil = transparent_img
+            for y in range(0, ch, ih):
+                for x in range(0, cw, iw):
+                    frame_pil.paste(wm_img, (x, y), wm_img)
+            return frame_pil
+
+        px, py = self._calc_position(iw, ih, cw, ch, wm)
+        frame_pil = transparent_img
+        frame_pil.paste(wm_img, (px, py), wm_img)
+        return frame_pil
 
     @staticmethod
     def _calc_position(w: int, h: int, cw: int, ch: int, wm: Watermark) -> Tuple[int, int]:
@@ -198,3 +241,20 @@ class WatermarkRenderer:
             PositionPreset.BOTTOM_RIGHT: (cw - w - margin, ch - h - margin),
         }
         return preset_map.get(wm.position_preset, (0, 0))
+
+    # ------------------------------------------------------------------ #
+    #  Export watermarked image                                           #
+    # ------------------------------------------------------------------ #
+    def export_image(self, watermarks: List[Watermark], output_path: str) -> Tuple[bool, str]:
+        """Composite watermarks onto the source image and save to output_path."""
+        if self._frame_pil is None:
+            return False, "No source image loaded"
+        try:
+            result = self.render_preview(watermarks)
+            if result is None:
+                return False, "Failed to render watermarks"
+            result = result.convert("RGB")
+            result.save(output_path, quality=95)
+            return True, ""
+        except Exception as e:
+            return False, f"Image export failed: {str(e)}"
