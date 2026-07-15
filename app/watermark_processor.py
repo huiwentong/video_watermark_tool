@@ -449,7 +449,12 @@ class WatermarkExporter:
         filter_complex = "[0:v][1:v]overlay=x=0:y=0:format=auto[out]"
         cmd.extend(["-filter_complex", filter_complex])
         cmd.extend(["-map", "[out]"])
+        cmd.extend(["-map", "0:a?"])
         cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "23"])
+        cmd.extend([
+            "-c:a", "aac",
+            "-b:a", "192k"
+        ])
         cmd.extend(["-progress", _progress_path])
         cmd.extend([output_path])
         print(cmd)
