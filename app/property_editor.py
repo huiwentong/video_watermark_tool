@@ -1,9 +1,10 @@
 ﻿from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QTextEdit, QFileDialog, QPushButton,QLineEdit,
     QComboBox, QSpinBox, QGroupBox, QFormLayout
 )
+from PySide6.QtWidgets import QSizePolicy
 from PySide6.QtCore import Qt, Signal
-from app.watermark import Watermark, PositionPreset
+from app.watermark import Watermark, PositionPreset, WatermarkType
 
 
 class WatermarkPropertyEditor(QWidget):
@@ -29,6 +30,101 @@ class WatermarkPropertyEditor(QWidget):
         )
         layout.addWidget(self.header_label)
 
+        self.setStyleSheet("""
+        QLabel {
+            color: #dddddd;
+            font-size: 13px;
+        }
+
+        QLineEdit {
+            background-color: #2b2b2b;
+            border: 1px solid #555;
+            border-radius: 5px;
+            padding: 5px 8px;
+            color: white;
+            font-size: 13px;
+        }
+
+        QLineEdit:focus {
+            border: 1px solid #4da3ff;
+        }
+
+
+        QPushButton {
+            background-color: #3a7afe;
+            color: white;
+            border-radius: 5px;
+            padding: 5px 15px;
+            font-size: 13px;
+        }
+
+        QPushButton:hover {
+            background-color: #5590ff;
+        }
+
+        QPushButton:pressed {
+            background-color: #2865d9;
+        }
+        QPushButton:disabled {
+            background-color: #444444;
+            color: #888888;
+            border: 1px solid #555555;
+        }
+        """)
+
+        src_group = QGroupBox("source")
+        src_layout = QVBoxLayout(src_group)
+        src_layout.setSpacing(4)
+        src_layout.setContentsMargins(4, 2, 4, 2)
+        # Watermark Text
+        self.text_edit_label = QLabel("WaterMark Text")
+        self.text_edit = QLineEdit()
+        self.text_edit.setFixedHeight(32)
+        self.text_edit.setPlaceholderText("Enter watermark text...")
+        self.text_edit.editingFinished.connect(self._on_source_changed)
+
+        self.text_edit_label.setFixedWidth(120)
+
+
+        self.text_edit_lay = QHBoxLayout()
+        self.text_edit_lay.setSpacing(12)
+
+        self.text_edit_lay.addWidget(self.text_edit_label)
+        self.text_edit_lay.addWidget(self.text_edit)
+
+        src_layout.addLayout(self.text_edit_lay)
+
+        # Image Selector
+        self.image_selector_button = QPushButton("Select Image")
+        self.image_selector_button.setMinimumWidth(80)
+        self.image_selector_button.setMaximumWidth(120)
+        self.image_selector_button.setFixedHeight(32)
+        self.image_selector_button.clicked.connect(self.onselectImage)
+
+        self.image_selector_text = QLineEdit()
+        self.image_selector_text.setFixedHeight(32)
+        self.image_selector_text.editingFinished.connect(self._on_source_changed)
+        self.image_selector_text.setPlaceholderText("choose image path...")
+
+        self.image_selector_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed
+        )
+
+        self.image_selector_text.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed
+        )
+
+        self.image_selector_lay = QHBoxLayout()
+        self.image_selector_lay.setSpacing(12)
+
+        self.image_selector_lay.addWidget(self.image_selector_button)
+        self.image_selector_lay.addWidget(self.image_selector_text)
+
+        src_layout.addLayout(self.image_selector_lay)
+        layout.addWidget(src_group)
+
         self.opacity_slider = self._make_slider("Opacity", 0, 100, 100, "%")
         layout.addWidget(self.opacity_slider)
 
@@ -37,6 +133,7 @@ class WatermarkPropertyEditor(QWidget):
 
         self.rotation_slider = self._make_slider("Rotation", -180, 180, 0, "\u00b0")
         layout.addWidget(self.rotation_slider)
+
 
         # position
         pos_group = QGroupBox("Position")
@@ -100,6 +197,15 @@ class WatermarkPropertyEditor(QWidget):
 
         layout.addStretch()
 
+    def onselectImage(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Watermark Image", "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.tiff *.webp);;All files (*.*)"
+        )
+        if path:
+            self.image_selector_text.setText(path)
+            self._on_source_changed()
+
     def _make_slider(self, label: str, min_v: int, max_v: int,
                      default: int, suffix: str) -> QWidget:
         w = QWidget()
@@ -139,6 +245,10 @@ class WatermarkPropertyEditor(QWidget):
         self._set_custom_visible(is_custom)
         self._emit_changed()
 
+
+    def _on_source_changed(self):
+        self._emit_changed()
+
     def _set_custom_visible(self, visible: bool):
         if self.custom_x_spin:
             self.custom_x_spin.setVisible(visible)
@@ -163,6 +273,19 @@ class WatermarkPropertyEditor(QWidget):
         self.scale_slider._value_label.setText(f"{wm.scale_percent}%")
         self.rotation_slider._slider.setValue(wm.rotation)
         self.rotation_slider._value_label.setText(f"{wm.rotation}{chr(176)}")
+
+        if(wm.wm_type == WatermarkType.IMAGE):
+            self.image_selector_button.setEnabled(True)
+            self.image_selector_text.setEnabled(True)
+            self.text_edit.setEnabled(False)
+            self.image_selector_text.setText(wm.image_path)
+            self.text_edit.setText('')
+        else:
+            self.image_selector_text.setText("")
+            self.text_edit.setText(wm.text_content)
+            self.text_edit.setEnabled(True)
+            self.image_selector_button.setEnabled(False)
+            self.image_selector_text.setEnabled(False)
 
         idx = self.pos_combo.findData(wm.position_preset.value)
         if idx >= 0:
@@ -190,3 +313,8 @@ class WatermarkPropertyEditor(QWidget):
         from app.watermark import TilingMode
         tile_val = self.tile_combo.currentData()
         wm.tiling_mode = TilingMode(tile_val)
+
+        if(wm.wm_type == WatermarkType.IMAGE):
+            wm.image_path = self.image_selector_text.text()
+        else:
+            wm.text_content = self.text_edit.text()
