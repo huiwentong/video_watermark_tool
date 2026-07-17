@@ -1,4 +1,4 @@
-import os
+﻿import os
 from pathlib import Path
 
 from PySide6.QtWidgets import (
@@ -233,6 +233,19 @@ class MainWindow(QMainWindow):
 
         self._setup_ui()
         self.setStyleSheet(KATANA_STYLE)
+        self._load_favorites_from_redis()
+
+    def _load_favorites_from_redis(self):
+        """On startup, try to load favorited watermarks from Redis."""
+        try:
+            from app.redis_manager import load_favorites
+            favs = load_favorites()
+            if favs:
+                self.console.watermarks.extend(favs)
+                self.console._refresh_list()
+                self._refresh_preview()
+        except Exception:
+            pass
 
     def _setup_ui(self):
         central = QWidget()
@@ -247,10 +260,14 @@ class MainWindow(QMainWindow):
 
         self.preview = PreviewPanel()
         self.preview.video_loaded.connect(self._on_video_loaded)
+        self.preview.frame_changed.connect(self._on_frame_changed)
         splitter.addWidget(self.preview)
 
         self.console = WatermarkConsole()
         self.console.watermarks_changed.connect(self._refresh_preview)
+        self.console.selection_changed.connect(self._on_selection_changed)
+        self.preview.canvas.watermark_moved.connect(self._on_canvas_wm_moved)
+        self.preview.canvas.watermark_scaled.connect(self._on_canvas_wm_scaled)
         splitter.addWidget(self.console)
 
         splitter.setSizes([650, 360])
@@ -338,15 +355,61 @@ class MainWindow(QMainWindow):
 
     def _refresh_preview(self):
         if self.video_path:
-            # print('refresh')
+
             watermarks = self.console.get_watermarks()
-            print(watermarks)
+
             self.preview.update_preview(watermarks)
             count = len(watermarks)
-            # for i in watermarks:
-            #     print(i.to_dict())
+
+
             if count > 0:
                 self.statusBar().showMessage(f"Video loaded  |  {count} watermark(s) active")
+            row = self.console.list_widget.currentRow()
+            if 0 <= row < len(watermarks):
+                self.preview.set_selected_watermark(watermarks[row])
+
+    def _on_selection_changed(self, wm):
+        self.preview.set_selected_watermark(wm)
+
+    def _on_frame_changed(self, frame_idx: int):
+        self._refresh_preview()
+
+    def _on_canvas_wm_moved(self, x, y):
+        # Sync property editor spin boxes BEFORE refresh so apply_to() doesn't overwrite drag values
+        pe = self.console.property_editor
+        pe._updating = True
+        pe.custom_x_spin.setValue(x)
+        pe.custom_y_spin.setValue(y)
+        self.preview.canvas._update_wm_rect()
+        self._refresh_preview()
+        pe._updating = False
+
+    def _on_canvas_wm_scaled(self, scale):
+        pe = self.console.property_editor
+        pe._updating = True
+        pe.scale_slider._slider.setValue(scale)
+        pe.scale_slider._value_spin.setValue(scale)
+        self.preview.canvas._update_wm_rect()
+        self._refresh_preview()
+        pe._updating = False
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape and self._exporting and hasattr(self, 'worker'):
+            self.statusBar().showMessage('Cancelling export...')
+            self.worker.cancel()
+            self._export_reset_ui()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _export_reset_ui(self):
+        self._exporting = False
+        self.export_btn.setEnabled(True)
+        self.export_img_btn.setEnabled(True)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setFormat('')
+        self.statusBar().showMessage('')
 
     def _export_video(self):
         if self._exporting or not self.video_path:
@@ -383,6 +446,7 @@ class MainWindow(QMainWindow):
                 self.output_path = output_path
                 self.watermark = watermark
                 self.video_size = video_size
+                self._cancelled = False
 
             def run(self):
                 success, err = self.exporter.export(
@@ -390,7 +454,13 @@ class MainWindow(QMainWindow):
                     self.watermark, self.video_size,
                     on_progress=self._on_progress
                 )
+                if self._cancelled:
+                    return
                 self.finished_signal.emit(success, self.output_path, err)
+
+            def cancel(self):
+                self._cancelled = True
+                self.exporter.cancel()
 
             def _on_progress(self, pct: int):
                 self.progress.emit(pct)
@@ -402,9 +472,11 @@ class MainWindow(QMainWindow):
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         cap.release()
 
+        watermarks = self.console.get_watermarks()
+        overlay = self.preview.renderer.render_watermark_overlay(watermarks)
         self.worker = ExportWorker(
             exporter, self.video_path, output_path,
-            self.preview.renderer.ori_wm_composite, (vw, vh, total_frames)
+            overlay, (vw, vh, total_frames)
         )
         self.worker.progress.connect(self.progress_bar.setValue)
         self.worker.finished_signal.connect(self._on_export_finished)
@@ -421,9 +493,9 @@ class MainWindow(QMainWindow):
                                     f"Video saved to:\n{output_path}")
         else:
             self.progress_bar.setValue(0)
-            self.statusBar().showMessage("Export failed")
+            self.statusBar().showMessage("Export cancelled")
             detail = f"ffmpeg command failed.\n\nError: {err_msg}"
-            QMessageBox.critical(self, "Export Failed", detail)
+            QMessageBox.critical(self, "Export Cancelled", detail)
 
         QTimer.singleShot(3000, lambda: self.progress_bar.setVisible(False))
 

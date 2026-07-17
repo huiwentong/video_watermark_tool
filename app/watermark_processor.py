@@ -1,4 +1,4 @@
-import subprocess
+﻿import subprocess
 import os
 import traceback
 import tempfile
@@ -52,6 +52,8 @@ class WatermarkExporter:
         self.ffmpeg_path = ffmpeg_path
         self._chinese_font_path = _find_chinese_font()
         self._temp_files: List[str] = []
+        self._process = None
+        self._output_path = ""
 
     def _cleanup(self):
         for p in self._temp_files:
@@ -73,6 +75,24 @@ class WatermarkExporter:
     #  Returns a PIL RGBA image at the final size (scaled, rotated,       #
     #  opacity applied), ready for compositing.                           #
     # ------------------------------------------------------------------ #
+    def cancel(self):
+        "Kill the current ffmpeg process and remove partial output."
+        if self._process and self._process.poll() is None:
+            try:
+                self._process.terminate()
+                self._process.wait(timeout=3)
+            except Exception:
+                try:
+                    self._process.kill()
+                except Exception:
+                    pass
+        if self._output_path and os.path.isfile(self._output_path):
+            try:
+                os.unlink(self._output_path)
+            except Exception:
+                pass
+        self._cleanup()
+
     def _render_watermark_element(self, wm: Watermark) -> Optional[PILImage.Image]:
         """Render a single watermark instance to a PIL RGBA image
         (scale + rotation + opacity applied, but NOT tiled/filled)."""
@@ -146,8 +166,9 @@ class WatermarkExporter:
             return None
 
         canvas = PILImage.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
-        for y in range(0, canvas_h, ih):
-            for x in range(0, canvas_w, iw):
+        gap = wm.tile_spacing
+        for y in range(0, canvas_h, ih + gap):
+            for x in range(0, canvas_w, iw + gap):
                 canvas.paste(elem, (x, y), elem)
 
         out = self._new_temp_file(".png")
@@ -397,6 +418,7 @@ class WatermarkExporter:
                watermarks: PILImage.Image, video_size=None,
                on_progress=None) -> tuple:
         self._cleanup()
+        self._output_path = output_path
 
         if video_size is None:
             import cv2
@@ -467,6 +489,7 @@ class WatermarkExporter:
                 encoding="utf-8",
                 errors="replace"
             )
+            self._process = process
 
             # Stderr reader thread (ffmpeg uses \r for progress, not \n)
             import time as _time

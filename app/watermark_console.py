@@ -1,4 +1,4 @@
-﻿from PySide6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QListWidget,
     QListWidgetItem, QLabel, QSplitter, QMessageBox
 )
@@ -10,6 +10,7 @@ from app.property_editor import WatermarkPropertyEditor
 
 class WatermarkConsole(QWidget):
     watermarks_changed = Signal()
+    selection_changed = Signal(object)  # selected Watermark or None
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -148,6 +149,8 @@ class WatermarkConsole(QWidget):
         else:
             self.property_editor.setEnabled(False)
             self.property_editor.header_label.setText("No watermark selected")
+        wm = self.watermarks[row] if 0 <= row < len(self.watermarks) else None
+        self.selection_changed.emit(wm)
 
     def _on_property_changed(self):
         row = self.list_widget.currentRow()
@@ -192,3 +195,4 @@ class WatermarkConsole(QWidget):
         if 0 <= row < len(self.watermarks):
             self.property_editor.apply_to(self.watermarks[row])
         return self.watermarks
+

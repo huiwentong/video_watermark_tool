@@ -7,7 +7,6 @@ import os
 
 
 def _find_chinese_font() -> str:
-    """Find a Chinese-capable TrueType font on Windows."""
     candidates = [
         "C:/Windows/Fonts/msyh.ttc",
         "C:/Windows/Fonts/simhei.ttf",
@@ -19,7 +18,6 @@ def _find_chinese_font() -> str:
     for p in candidates:
         if os.path.isfile(p):
             return p
-    # Fallback: try to find any .ttf/.ttc font
     try:
         for f in os.listdir("C:/Windows/Fonts"):
             if f.lower().endswith((".ttf", ".ttc")):
@@ -32,7 +30,7 @@ def _find_chinese_font() -> str:
 
 
 class WatermarkRenderer:
-    """Preview rendering engine — composite watermarks onto video frames"""
+    """Preview rendering engine -- composite watermarks onto video frames"""
 
     def __init__(self, video_path: str = ""):
         self.video_path = video_path
@@ -44,6 +42,8 @@ class WatermarkRenderer:
         self._chinese_font_path = _find_chinese_font()
         self._is_image_source: bool = False
         self._source_image_path: str = ""
+        self._video_fps: float = 0.0
+        self._total_frames: int = 0
 
     def load_frame(self, video_path: Optional[str] = None, time_sec: float = 0.0) -> bool:
         if video_path:
@@ -54,6 +54,8 @@ class WatermarkRenderer:
         if not cap.isOpened():
             return False
         fps = cap.get(cv2.CAP_PROP_FPS)
+        self._video_fps = fps
+        self._total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         frame_idx = int(time_sec * fps) if fps > 0 else 0
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
         ret, self._frame = cap.read()
@@ -66,7 +68,6 @@ class WatermarkRenderer:
         return True
 
     def load_image(self, image_path: str) -> bool:
-        """Load a static image as the source (instead of a video frame)."""
         if not os.path.isfile(image_path):
             return False
         try:
@@ -79,6 +80,12 @@ class WatermarkRenderer:
         except Exception:
             return False
 
+    def get_total_frames(self) -> int:
+        return self._total_frames
+
+    def get_video_fps(self) -> float:
+        return self._video_fps
+
     def is_image_source(self) -> bool:
         return self._is_image_source
 
@@ -88,10 +95,7 @@ class WatermarkRenderer:
     def render_preview(self, watermarks: List[Watermark]) -> Optional[PILImage.Image]:
         if self._frame_pil is None:
             return None
-        frame = self._frame_pil.copy()
-        # if self._is_image_source and frame.mode != "RGBA":
-        frame = frame.convert("RGBA")
-        print('render preview！')
+        frame = self._frame_pil.copy().convert("RGBA")
         for wm in watermarks:
             if wm.wm_type == WatermarkType.IMAGE:
                 wm_img = self._render_image_watermark(wm, frame.size)
@@ -100,8 +104,49 @@ class WatermarkRenderer:
             if wm_img is None:
                 continue
             frame = self._composite_watermark(frame, wm_img, wm)
-            self.ori_wm_composite = self._composite_only_wmark(frame, wm_img, wm)
         return frame
+
+    # ------------------------------------------------------------------ #
+    #  Get watermark bounding rect in frame coordinates                   #
+    #  Returns (x, y, w, h) or None for tile/fill modes                   #
+    # ------------------------------------------------------------------ #
+    def render_watermark_overlay(self, watermarks: List[Watermark]) -> Optional[PILImage.Image]:
+        """Render all watermarks onto a transparent canvas for export."""
+        if self._frame_pil is None:
+            return None
+        cw, ch = self._frame_pil.size
+        overlay = PILImage.new("RGBA", (cw, ch), (0, 0, 0, 0))
+        for wm in watermarks:
+            if wm.wm_type == WatermarkType.IMAGE:
+                wm_img = self._render_image_watermark(wm, (cw, ch))
+            else:
+                wm_img = self._render_text_watermark(wm, (cw, ch))
+            if wm_img is None:
+                continue
+            fp = overlay.copy()
+            fp = self._composite_watermark(fp, wm_img, wm)
+            overlay = fp
+        return overlay
+
+    def get_watermark_rect(self, wm: Watermark) -> Optional[Tuple[int, int, int, int]]:
+        """Return (x, y, width, height) of a single watermark in frame pixels."""
+        if wm.tiling_mode in (TilingMode.TILE, TilingMode.FILL):
+            return None
+        if self._frame_pil is None:
+            return None
+
+        # Render the watermark element to get its size
+        if wm.wm_type == WatermarkType.IMAGE:
+            elem = self._render_image_watermark(wm, self._frame_pil.size)
+        else:
+            elem = self._render_text_watermark(wm, self._frame_pil.size)
+        if elem is None:
+            return None
+
+        iw, ih = elem.size
+        cw, ch = self._frame_pil.size
+        px, py = self._calc_position(iw, ih, cw, ch, wm)
+        return px, py, iw, ih
 
     # ------------------------------------------------------------------ #
     #  Image watermark                                                     #
@@ -116,13 +161,12 @@ class WatermarkRenderer:
         return self._apply_common_transforms(img, wm)
 
     # ------------------------------------------------------------------ #
-    #  Text watermark — render text at native size then scale uniformly    #
+    #  Text watermark                                                      #
     # ------------------------------------------------------------------ #
     def _render_text_watermark(self, wm: Watermark, canvas_size: Tuple[int, int]) -> Optional[PILImage.Image]:
         text = wm.text_content or "watermark"
         base_size = max(10, wm.font_size)
 
-        # Use Chinese font if available, otherwise fallback
         font = None
         if self._chinese_font_path:
             try:
@@ -131,98 +175,77 @@ class WatermarkRenderer:
                 pass
         if font is None:
             try:
-                if wm.font_path:
-                    font = ImageFont.truetype(wm.font_path, base_size)
-                else:
-                    font = ImageFont.load_default()
+                font = ImageFont.load_default()
             except Exception:
                 font = ImageFont.load_default()
 
-        # Measure text
         dummy = PILImage.new("RGBA", (1, 1))
         draw = ImageDraw.Draw(dummy)
         bbox = draw.textbbox((0, 0), text, font=font)
-        tw = bbox[2] - bbox[0]
-        th = bbox[3] - bbox[1]
-        padding = 8
-        tw += padding * 2
-        th += padding * 2
+        tw = bbox[2] - bbox[0] + 16
+        th = bbox[3] - bbox[1] + 16
 
-        # Render text onto RGBA canvas
         txt_img = PILImage.new("RGBA", (tw, th), (0, 0, 0, 0))
         txt_draw = ImageDraw.Draw(txt_img)
-        txt_draw.text((padding, padding), text, font=font, fill=wm.font_color + "FF")
-
-        # Uniformly scale using common transforms (scale is applied here only ONCE)
+        txt_draw.text((8, 8), text, font=font, fill=wm.font_color + "FF")
         return self._apply_common_transforms(txt_img, wm)
 
     # ------------------------------------------------------------------ #
-    #  Common: scale + rotate + opacity (applied exactly once)            #
+    #  Common transforms                                                  #
     # ------------------------------------------------------------------ #
     def _apply_common_transforms(self, img: PILImage.Image, wm: Watermark) -> PILImage.Image:
         img = img.convert("RGBA")
         scale = wm.scale_percent / 100.0
-
-        # Scale
         iw, ih = img.size
         new_w = max(1, int(iw * scale))
         new_h = max(1, int(ih * scale))
         if (new_w, new_h) != (iw, ih):
             img = img.resize((new_w, new_h), PILImage.Resampling.LANCZOS)
-
-        # Rotate
         if wm.rotation != 0:
             img = img.rotate(wm.rotation, expand=True, resample=PILImage.Resampling.BICUBIC)
-
-        # Opacity
         r, g, b, a = img.split()
         a = a.point(lambda x: int(x * wm.opacity / 100))
         img = PILImage.merge("RGBA", (r, g, b, a))
-
-        # Fill mode
         if wm.tiling_mode == TilingMode.FILL:
             cw, ch = self._frame_pil.size if self._frame_pil else (1920, 1080)
             img = img.resize((cw, ch), PILImage.Resampling.LANCZOS)
-
         return img
 
     # ------------------------------------------------------------------ #
-    #  Composite onto frame                                                #
+    #  Composite                                                           #
     # ------------------------------------------------------------------ #
     def _composite_watermark(self, frame: PILImage.Image, wm_img: PILImage.Image,
                              wm: Watermark) -> PILImage.Image:
         cw, ch = frame.size
         iw, ih = wm_img.size
-
         if wm.tiling_mode == TilingMode.TILE:
-            frame_pil = frame.convert("RGBA")
-            for y in range(0, ch, ih):
-                for x in range(0, cw, iw):
-                    frame_pil.paste(wm_img, (x, y), wm_img)
-            return frame_pil
-
+            fp = frame.convert("RGBA")
+            gap = wm.tile_spacing
+            for y in range(0, ch, ih + gap):
+                for x in range(0, cw, iw + gap):
+                    fp.paste(wm_img, (x, y), wm_img)
+            return fp
         px, py = self._calc_position(iw, ih, cw, ch, wm)
-        frame_pil = frame.convert("RGBA")
-        frame_pil.paste(wm_img, (px, py), wm_img)
-        return frame_pil
-    
+        fp = frame.convert("RGBA")
+        fp.paste(wm_img, (px, py), wm_img)
+        return fp
+
     def _composite_only_wmark(self, frame: PILImage.Image, wm_img: PILImage.Image,
-                             wm: Watermark) -> PILImage.Image:
+                              wm: Watermark) -> PILImage.Image:
         cw, ch = frame.size
         iw, ih = wm_img.size
-        transparent_img = PILImage.new("RGBA", (cw, ch), (0, 0, 0, 0))
-
+        transparent = PILImage.new("RGBA", (cw, ch), (0, 0, 0, 0))
         if wm.tiling_mode == TilingMode.TILE:
-            frame_pil = transparent_img
-            for y in range(0, ch, ih):
-                for x in range(0, cw, iw):
-                    frame_pil.paste(wm_img, (x, y), wm_img)
-            return frame_pil
-
+            fp = transparent
+            gap = wm.tile_spacing
+            for y in range(0, ch, ih + gap):
+                for x in range(0, cw, iw + gap):
+                    fp.paste(wm_img, (x, y), wm_img)
+            return fp
         px, py = self._calc_position(iw, ih, cw, ch, wm)
-        frame_pil = transparent_img
-        frame_pil.paste(wm_img, (px, py), wm_img)
-        return frame_pil
+        fp = transparent
+        fp.paste(wm_img, (px, py), wm_img)
+        return fp
 
     @staticmethod
     def _calc_position(w: int, h: int, cw: int, ch: int, wm: Watermark) -> Tuple[int, int]:
@@ -242,11 +265,7 @@ class WatermarkRenderer:
         }
         return preset_map.get(wm.position_preset, (0, 0))
 
-    # ------------------------------------------------------------------ #
-    #  Export watermarked image                                           #
-    # ------------------------------------------------------------------ #
     def export_image(self, watermarks: List[Watermark], output_path: str) -> Tuple[bool, str]:
-        """Composite watermarks onto the source image and save to output_path."""
         if self._frame_pil is None:
             return False, "No source image loaded"
         try:

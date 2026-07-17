@@ -41,9 +41,30 @@ class Watermark:
     scale_percent: int = 100
     rotation: int = 0
     tiling_mode: TilingMode = TilingMode.NONE
+    tile_spacing: int = 0
     position_preset: PositionPreset = PositionPreset.CENTER
     custom_x: int = 0
     custom_y: int = 0
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Watermark":
+        return cls(
+            id=data.get("id", uuid.uuid4().hex[:8]),
+            wm_type=WatermarkType(data.get("wm_type", "image")),
+            image_path=data.get("image_path", ""),
+            text_content=data.get("text_content", "??"),
+            font_size=data.get("font_size", 36),
+            font_color=data.get("font_color", "#FFFFFF"),
+            font_path=data.get("font_path", ""),
+            opacity=data.get("opacity", 100),
+            scale_percent=data.get("scale_percent", 100),
+            rotation=data.get("rotation", 0),
+            tiling_mode=TilingMode(data.get("tiling_mode", "none")),
+            tile_spacing=data.get("tile_spacing", 0),
+            position_preset=PositionPreset(data.get("position_preset", "center")),
+            custom_x=data.get("custom_x", 0),
+            custom_y=data.get("custom_y", 0),
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -58,6 +79,7 @@ class Watermark:
             "scale_percent": self.scale_percent,
             "rotation": self.rotation,
             "tiling_mode": self.tiling_mode.value,
+            "tile_spacing": self.tile_spacing,
             "position_preset": self.position_preset.value,
             "custom_x": self.custom_x,
             "custom_y": self.custom_y,

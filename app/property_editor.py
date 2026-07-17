@@ -24,11 +24,26 @@ class WatermarkPropertyEditor(QWidget):
         layout.setContentsMargins(6, 4, 6, 6)
         layout.setSpacing(2)
 
+        header_row = QHBoxLayout()
+        header_row.setSpacing(6)
         self.header_label = QLabel("No watermark selected")
         self.header_label.setStyleSheet(
             "font-weight: 600; font-size: 12px; padding: 4px 0 6px 0; color: #8ab4d6;"
         )
-        layout.addWidget(self.header_label)
+        self.fav_btn = QPushButton("\u2606 Favorite")
+        self.fav_btn.setFixedHeight(22)
+        self.fav_btn.setStyleSheet(
+            "QPushButton { background: #3a3a3a; border: 1px solid #5a5a5a; border-radius: 3px; "
+            "padding: 2px 10px; color: #d4d4d4; font-size: 10px; font-weight: 500; }"
+            "QPushButton:hover { background: #484848; border-color: #5dade2; }"
+            "QPushButton:checked { background: #5a3c3c; border-color: #d98a3c; color: #f0c040; }"
+        )
+        self.fav_btn.setCheckable(True)
+        self.fav_btn.setVisible(False)
+        self.fav_btn.clicked.connect(self._on_fav_toggle)
+        header_row.addWidget(self.header_label, 1)
+        header_row.addWidget(self.fav_btn)
+        layout.addLayout(header_row)
 
         self.setStyleSheet("""
         QLabel {
@@ -125,13 +140,13 @@ class WatermarkPropertyEditor(QWidget):
         src_layout.addLayout(self.image_selector_lay)
         layout.addWidget(src_group)
 
-        self.opacity_slider = self._make_slider("Opacity", 0, 100, 100, "%")
+        self.opacity_slider = self._make_slider("Opacity", 0, 100, 100, "%", use_spinbox=True)
         layout.addWidget(self.opacity_slider)
 
-        self.scale_slider = self._make_slider("Scale", 5, 500, 100, "%")
+        self.scale_slider = self._make_slider("Scale", 5, 500, 100, "%", use_spinbox=True)
         layout.addWidget(self.scale_slider)
 
-        self.rotation_slider = self._make_slider("Rotation", -180, 180, 0, "\u00b0")
+        self.rotation_slider = self._make_slider("Rotation", -180, 180, 0, "°", use_spinbox=True)
         layout.addWidget(self.rotation_slider)
 
 
@@ -193,9 +208,51 @@ class WatermarkPropertyEditor(QWidget):
         self.tile_combo.addItem("Fill Frame", TilingMode.FILL.value)
         self.tile_combo.currentIndexChanged.connect(self._emit_changed)
         tile_layout.addRow("Mode:", self.tile_combo)
+        self.tile_spacing_spin = QSpinBox()
+        self.tile_spacing_spin.setRange(0, 500)
+        self.tile_spacing_spin.setValue(0)
+        self.tile_spacing_spin.setSuffix(" px")
+        self.tile_spacing_spin.setStyleSheet(
+            "QSpinBox { color: #5dade2; font-weight: 500; min-width: 60px; "
+            "font-size: 11px; background: #3c3c3c; border: 1px solid #4d4d4d; "
+            "border-radius: 3px; padding: 2px 4px; }"
+            "QSpinBox:focus { border-color: #5dade2; }"
+        )
+        self.tile_spacing_spin.valueChanged.connect(self._emit_changed)
+        tile_layout.addRow("Spacing:", self.tile_spacing_spin)
         layout.addWidget(tile_group)
 
         layout.addStretch()
+
+    def _update_fav_btn(self):
+        if self._watermark is None:
+            self.fav_btn.setVisible(False)
+            return
+        try:
+            from app.redis_manager import is_favorited
+            fav = is_favorited(self._watermark)
+        except Exception:
+            fav = False
+        self.fav_btn.setVisible(True)
+        self.fav_btn.blockSignals(True)
+        if fav:
+            self.fav_btn.setText("\u2605 Favorited")
+            self.fav_btn.setChecked(True)
+        else:
+            self.fav_btn.setText("\u2606 Favorite")
+            self.fav_btn.setChecked(False)
+        self.fav_btn.blockSignals(False)
+
+    def _on_fav_toggle(self, checked: bool):
+        if self._watermark is None:
+            return
+        from app.redis_manager import save_favorite, remove_favorite
+        if checked:
+            save_favorite(self._watermark)
+            self.fav_btn.setText("\u2605 Favorited")
+        else:
+            remove_favorite(self._watermark)
+            self.fav_btn.setText("\u2606 Favorite")
 
     def onselectImage(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -207,7 +264,8 @@ class WatermarkPropertyEditor(QWidget):
             self._on_source_changed()
 
     def _make_slider(self, label: str, min_v: int, max_v: int,
-                     default: int, suffix: str) -> QWidget:
+                     default: int, suffix: str,
+                     use_spinbox: bool = False) -> QWidget:
         w = QWidget()
         w.setStyleSheet("background: transparent;")
         wl = QVBoxLayout(w)
@@ -217,12 +275,30 @@ class WatermarkPropertyEditor(QWidget):
         header = QHBoxLayout()
         lbl = QLabel(label)
         lbl.setStyleSheet("font-size: 11px; color: #b8b8b8; background: transparent;")
-        val = QLabel(f"{default}{suffix}")
-        val.setAlignment(Qt.AlignRight)
-        val.setStyleSheet(
-            "color: #5dade2; font-weight: 500; min-width: 36px; "
-            "font-size: 11px; background: transparent;"
-        )
+
+        if use_spinbox:
+            from PySide6.QtWidgets import QSpinBox
+            val = QSpinBox()
+            val.setRange(min_v, max_v)
+            val.setValue(default)
+            val.setSuffix(suffix)
+            val.setAlignment(Qt.AlignRight)
+            val.setStyleSheet(
+                "QSpinBox { color: #5dade2; font-weight: 500; min-width: 60px; "
+                "font-size: 11px; background: #3c3c3c; border: 1px solid #4d4d4d; "
+                "border-radius: 3px; padding: 2px 4px; }"
+                "QSpinBox:focus { border-color: #5dade2; }"
+                "QSpinBox::up-button, QSpinBox::down-button { border: none; "
+                "background: #3a3a3a; width: 14px; }"
+            )
+        else:
+            val = QLabel(f"{default}{suffix}")
+            val.setAlignment(Qt.AlignRight)
+            val.setStyleSheet(
+                "color: #5dade2; font-weight: 500; min-width: 36px; "
+                "font-size: 11px; background: transparent;"
+            )
+
         header.addWidget(lbl)
         header.addStretch()
         header.addWidget(val)
@@ -231,13 +307,24 @@ class WatermarkPropertyEditor(QWidget):
         slider = QSlider(Qt.Horizontal)
         slider.setRange(min_v, max_v)
         slider.setValue(default)
-        slider.valueChanged.connect(
-            lambda v, vl=val, s=suffix: vl.setText(f"{v}{s}")
-        )
-        slider.valueChanged.connect(lambda: self._emit_changed())
+
+        if use_spinbox:
+            # Sync slider -> spinbox
+            slider.valueChanged.connect(lambda v, sp=val: sp.setValue(v))
+            # Sync spinbox -> slider
+            val.valueChanged.connect(lambda v, sl=slider: sl.setValue(v))
+            # Emit changed when either changes (spinbox covers both paths)
+            val.valueChanged.connect(lambda: self._emit_changed())
+            w._value_spin = val
+        else:
+            slider.valueChanged.connect(
+                lambda v, vl=val, s=suffix: vl.setText(f"{v}{s}")
+            )
+            slider.valueChanged.connect(lambda: self._emit_changed())
+            w._value_label = val
+
         wl.addWidget(slider)
         w._slider = slider
-        w._value_label = val
         return w
 
     def _on_pos_changed(self):
@@ -268,11 +355,11 @@ class WatermarkPropertyEditor(QWidget):
         self.header_label.setText(f"{type_str} Watermark  \u2014  {wm.id}")
 
         self.opacity_slider._slider.setValue(wm.opacity)
-        self.opacity_slider._value_label.setText(f"{wm.opacity}%")
+        self.opacity_slider._value_spin.setValue(wm.opacity)
         self.scale_slider._slider.setValue(wm.scale_percent)
-        self.scale_slider._value_label.setText(f"{wm.scale_percent}%")
+        self.scale_slider._value_spin.setValue(wm.scale_percent)
         self.rotation_slider._slider.setValue(wm.rotation)
-        self.rotation_slider._value_label.setText(f"{wm.rotation}{chr(176)}")
+        self.rotation_slider._value_spin.setValue(wm.rotation)
 
         if(wm.wm_type == WatermarkType.IMAGE):
             self.image_selector_button.setEnabled(True)
@@ -297,7 +384,9 @@ class WatermarkPropertyEditor(QWidget):
         idx = self.tile_combo.findData(wm.tiling_mode.value)
         if idx >= 0:
             self.tile_combo.setCurrentIndex(idx)
+        self.tile_spacing_spin.setValue(wm.tile_spacing)
 
+        self._update_fav_btn()
         self._updating = False
 
     def apply_to(self, wm: Watermark):
@@ -313,6 +402,7 @@ class WatermarkPropertyEditor(QWidget):
         from app.watermark import TilingMode
         tile_val = self.tile_combo.currentData()
         wm.tiling_mode = TilingMode(tile_val)
+        wm.tile_spacing = self.tile_spacing_spin.value()
 
         if(wm.wm_type == WatermarkType.IMAGE):
             wm.image_path = self.image_selector_text.text()
