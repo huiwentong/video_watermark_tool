@@ -6,13 +6,13 @@ from PySide6.QtGui import (
 )
 import os as _os
 from PIL import Image as PILImage
-from watermark.app.renderer import WatermarkRenderer
-from watermark.app.watermark import Watermark, PositionPreset
+from app.renderer import WatermarkRenderer
+from app.watermark import Watermark, PositionPreset
 
 HANDLE_SIZE = 12
 HANDLE_COLOR = QColor("#5dade2")
 HANDLE_FILL = QColor("#1a1a2e")
-BORDER_PEN = QPen(QColor("#5dade2"), 1, Qt.DashLine)
+BORDER_PEN = QPen(QColor("#5dade2"), 1, Qt.PenStyle.DashLine)
 
 
 class PreviewCanvas(QWidget):
@@ -25,7 +25,7 @@ class PreviewCanvas(QWidget):
         self.setAcceptDrops(True)
         self.setMouseTracking(True)
         self.setMinimumSize(480, 360)
-        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._pixmap = QPixmap()
         self._empty_text = "Drop video or image here"
         self._is_empty = True
@@ -59,7 +59,7 @@ class PreviewCanvas(QWidget):
         else:
             self._selected_wm = None
             self._wm_rect_frame = None
-        self.setCursor(Qt.ArrowCursor)
+        self.setCursor(Qt.CursorShape.ArrowCursor)
         self.update()
 
     # -- coordinate helpers ----------------------------------------------------
@@ -68,7 +68,7 @@ class PreviewCanvas(QWidget):
             return QRect()
         pm = self._pixmap
         ws = self.size()
-        scaled = pm.scaled(ws, Qt.KeepAspectRatio, Qt.SmoothTransformation).size()
+        scaled = pm.scaled(ws, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation).size()
         x = (ws.width() - scaled.width()) // 2
         y = (ws.height() - scaled.height()) // 2
         return QRect(x, y, scaled.width(), scaled.height())
@@ -337,7 +337,7 @@ class PreviewPanel(QWidget):
         self.canvas.file_dropped.connect(self._on_file_dropped)
         layout.addWidget(self.canvas, 1)
 
-        self.frame_slider = QSlider(Qt.Horizontal)
+        self.frame_slider = QSlider(Qt.Orientation.Horizontal)
         self.frame_slider.setMinimum(0)
         self.frame_slider.setMaximum(0)
         self.frame_slider.setValue(0)
