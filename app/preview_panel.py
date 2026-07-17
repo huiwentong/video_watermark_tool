@@ -1,4 +1,4 @@
-﻿from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton, QFileDialog, QSlider
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout, QPushButton, QFileDialog, QSlider
 from PySide6.QtCore import Qt, Signal, QRect, QRectF, QPointF
 from PySide6.QtGui import (
     QPixmap, QImage, QFont, QPainter, QPen, QBrush, QColor,
@@ -6,8 +6,8 @@ from PySide6.QtGui import (
 )
 import os as _os
 from PIL import Image as PILImage
-from app.renderer import WatermarkRenderer
-from app.watermark import Watermark, PositionPreset
+from watermark.app.renderer import WatermarkRenderer
+from watermark.app.watermark import Watermark, PositionPreset
 
 HANDLE_SIZE = 12
 HANDLE_COLOR = QColor("#5dade2")
@@ -36,6 +36,8 @@ class PreviewCanvas(QWidget):
         self._drag_start_frame_pt = (0.0, 0.0)
         self._drag_start_scale = 100
         self._drag_start_rect = (0, 0, 0, 0)
+        self._drag_hovering = False
+        self._mouse_hovering = False
 
     # -- public api ------------------------------------------------------------
     def set_pixmap(self, pm):
@@ -136,16 +138,22 @@ class PreviewCanvas(QWidget):
         painter.fillRect(self.rect(), QColor("#1a1a1a"))
 
         if self._is_empty or self._pixmap.isNull():
-            painter.setPen(QColor("#666"))
-            f = self.font()
-            f.setPointSize(12)
-            painter.setFont(f)
-            painter.drawText(self.rect(), Qt.AlignCenter, self._empty_text)
+            if self._mouse_hovering or self._drag_hovering:
+                self._paint_drag_hint(painter, overlay=self._drag_hovering)
+            else:
+                painter.setPen(QColor("#666"))
+                f = self.font()
+                f.setPointSize(12)
+                painter.setFont(f)
+                painter.drawText(self.rect(), Qt.AlignCenter, self._empty_text)
             painter.end()
             return
 
         dr = self._display_rect()
         painter.drawPixmap(dr, self._pixmap, self._pixmap.rect())
+
+        if self._mouse_hovering or self._drag_hovering:
+            self._paint_drag_hint(painter, overlay=self._drag_hovering)
 
         if self._selected_wm and self._wm_rect_frame:
             body = self._body_rect()
@@ -158,6 +166,22 @@ class PreviewCanvas(QWidget):
                 painter.drawRect(r)
 
         painter.end()
+
+    def _paint_drag_hint(self, painter, overlay=False):
+        if overlay:
+            clr = QColor("#5dade2")
+            clr.setAlpha(30)
+            painter.fillRect(self.rect(), clr)
+        pen = QPen(QColor("#5dade2"), 2, Qt.DashLine)
+        painter.setPen(pen)
+        margin = 8
+        painter.drawRoundedRect(self.rect().adjusted(margin, margin, -margin, -margin), 8, 8)
+        f = self.font()
+        f.setPointSize(14)
+        f.setBold(True)
+        painter.setFont(f)
+        painter.setPen(QColor("#7ebef2"))
+        painter.drawText(self.rect(), Qt.AlignCenter, "拖拽文件到此处释放")
 
     # -- mouse -----------------------------------------------------------------
     def mousePressEvent(self, event):
@@ -239,9 +263,22 @@ class PreviewCanvas(QWidget):
         if p and hasattr(p, "renderer"):
             self._wm_rect_frame = p.renderer.get_watermark_rect(self._selected_wm)
 
+    # -- mouse enter/leave -----------------------------------------------------
+    def enterEvent(self, event):
+        self._mouse_hovering = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._mouse_hovering = False
+        self.update()
+        super().leaveEvent(event)
+
     # -- drag-drop -------------------------------------------------------------
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
+            self._drag_hovering = True
+            self.update()
             event.acceptProposedAction()
 
     def dragMoveEvent(self, event):
@@ -251,12 +288,14 @@ class PreviewCanvas(QWidget):
     def dropEvent(self, event):
         if not event.mimeData().hasUrls():
             return
+        self._drag_hovering = False
         urls = event.mimeData().urls()
         if urls:
             self.file_dropped.emit(urls[0].toLocalFile())
 
     def dragLeaveEvent(self, event):
-        pass
+        self._drag_hovering = False
+        self.update()
 
 
 class PreviewPanel(QWidget):
