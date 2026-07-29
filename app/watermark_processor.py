@@ -468,11 +468,19 @@ class WatermarkExporter:
         cmd.extend(["-i", _wm_path])
 
 
-        filter_complex = "[0:v][1:v]overlay=x=0:y=0:format=auto[out]"
+        filter_complex = "[0:v][1:v]overlay=x=0:y=0:format=auto,format=yuv420p[out]"
         cmd.extend(["-filter_complex", filter_complex])
         cmd.extend(["-map", "[out]"])
         cmd.extend(["-map", "0:a?"])
-        cmd.extend(["-c:v", "libx264", "-preset", "medium", "-crf", "23"])
+        cmd.extend([
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-profile:v", "high",
+            "-level", "4.1",
+            "-movflags", "+faststart",
+        ])
         cmd.extend([
             "-c:a", "aac",
             "-b:a", "192k"
