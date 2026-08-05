@@ -1,9 +1,11 @@
 ﻿import cv2
 import numpy as np
 from PIL import Image as PILImage, ImageDraw, ImageFont
+PILImage.MAX_IMAGE_PIXELS = None
 from typing import Optional, Tuple, List
-from app.watermark import Watermark, WatermarkType, TilingMode, PositionPreset
+from watermark.app.watermark import Watermark, WatermarkType, TilingMode, PositionPreset
 import os
+import traceback
 
 
 def _find_chinese_font() -> str:
@@ -78,6 +80,7 @@ class WatermarkRenderer:
             self._is_image_source = True
             return True
         except Exception:
+            traceback.print_exc()
             return False
 
     def get_total_frames(self) -> int:
@@ -218,17 +221,27 @@ class WatermarkRenderer:
                              wm: Watermark) -> PILImage.Image:
         cw, ch = frame.size
         iw, ih = wm_img.size
+        fp = frame.convert("RGBA")
         if wm.tiling_mode == TilingMode.TILE:
-            fp = frame.convert("RGBA")
+            layer = PILImage.new(
+                "RGBA",
+                (cw, ch),
+                (0, 0, 0, 0)
+            )
             gap = wm.tile_spacing
             for y in range(0, ch, ih + gap):
                 for x in range(0, cw, iw + gap):
-                    fp.paste(wm_img, (x, y), wm_img)
-            return fp
-        px, py = self._calc_position(iw, ih, cw, ch, wm)
-        fp = frame.convert("RGBA")
-        fp.paste(wm_img, (px, py), wm_img)
-        return fp
+                    layer.alpha_composite(wm_img, (x, y))
+            return PILImage.alpha_composite(fp, layer)
+        else:
+            px, py = self._calc_position(iw, ih, cw, ch, wm)
+            layer = PILImage.new(
+                "RGBA",
+                (cw, ch),
+                (0, 0, 0, 0)
+            )
+            layer.alpha_composite(wm_img, (px, py))
+            return PILImage.alpha_composite(fp, layer)
 
     def _composite_only_wmark(self, frame: PILImage.Image, wm_img: PILImage.Image,
                               wm: Watermark) -> PILImage.Image:
