@@ -4,7 +4,7 @@ import traceback
 import tempfile
 from typing import List, Tuple, Optional
 from PIL import Image as PILImage, ImageDraw, ImageFont
-from app.watermark import Watermark, WatermarkType, TilingMode, PositionPreset
+from watermark.app.watermark import Watermark, WatermarkType, TilingMode, PositionPreset
 
 
 def _find_chinese_font() -> str:
@@ -459,7 +459,13 @@ class WatermarkExporter:
         os.unlink(_wm_path)
 
         # Build ffmpeg command
-        cmd = [self.ffmpeg_path, "-y", "-i", input_path]
+        cmd = [
+            self.ffmpeg_path,
+            "-y",
+            "-i", input_path,
+            "-map", "0:v",
+            "-map", "0:a"
+        ]
         watermarks.save(_wm_path, 'PNG')
         # for wm in processed:
         #     if wm.wm_type == WatermarkType.IMAGE and os.path.isfile(wm.image_path):
@@ -472,6 +478,7 @@ class WatermarkExporter:
         cmd.extend(["-filter_complex", filter_complex])
         cmd.extend(["-map", "[out]"])
         cmd.extend(["-map", "0:a?"])
+
         cmd.extend([
             "-c:v", "libx264",
             "-preset", "medium",
