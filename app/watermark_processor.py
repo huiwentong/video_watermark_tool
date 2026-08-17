@@ -463,21 +463,19 @@ class WatermarkExporter:
             self.ffmpeg_path,
             "-y",
             "-i", input_path,
-            "-map", "0:v",
-            "-map", "0:a"
         ]
         watermarks.save(_wm_path, 'PNG')
         # for wm in processed:
         #     if wm.wm_type == WatermarkType.IMAGE and os.path.isfile(wm.image_path):
 
 
-        cmd.extend(["-i", _wm_path])
+        cmd.extend(["-i", _wm_path, "-map", "0:a:0"])
 
 
         filter_complex = "[0:v][1:v]overlay=x=0:y=0:format=auto,format=yuv420p[out]"
         cmd.extend(["-filter_complex", filter_complex])
         cmd.extend(["-map", "[out]"])
-        cmd.extend(["-map", "0:a?"])
+        # cmd.extend(["-map", "0:a?"])
 
         cmd.extend([
             "-c:v", "libx264",
